@@ -32,9 +32,7 @@ const BTN_MIDDLE: u32 = 0x112;
 const BTN_SIDE: u32 = 0x113;
 const BTN_EXTRA: u32 = 0x114;
 
-const PEER_TIMEOUT: Duration = Duration::from_secs(4);
-// Der Partner kann beim Pairing lange auf die Bestätigung des Benutzers warten.
-const FIRST_CONTACT_TIMEOUT: Duration = Duration::from_secs(150);
+const PEER_TIMEOUT: Duration = Duration::from_secs(8);
 // Direkt nach dem Betreten erzeugt die Platzierung des Zeigers selbst Randkontakt; der Rückwechsel wird so lange ignoriert.
 const ENTRY_GRACE: Duration = Duration::from_millis(400);
 const ENTRY_INSET: f32 = 20.0;
@@ -109,6 +107,7 @@ pub struct Session<'a> {
     my_seq: u8,
     peer_seq: Option<u8>,
     clip: ClipState,
+    master_return_grace_until: Option<Instant>,
 }
 
 fn button_from_code(code: u32) -> Option<Button> {
@@ -163,10 +162,13 @@ impl<'a> Session<'a> {
                 incoming: None,
                 completed_id: None,
             },
+            master_return_grace_until: None,
         }
     }
 
     pub async fn run(mut self) -> Ended {
+        // Eine Erfassung aus einer vorigen Sitzung darf nicht hängen bleiben (Zeiger weg, Klicks kommen nirgends an).
+        let _ = self.local.cmd.send(CaptureCmd::Release { position: None }).await;
         // Der Master fängt ab Verbindungsaufbau an der Kante ab, der Node erst, wenn er gesteuert wird.
         self.local.connected.store(self.opts.role == Role::Master, Ordering::Relaxed);
         let ended = self.event_loop().await;
@@ -190,24 +192,21 @@ impl<'a> Session<'a> {
     async fn cleanup(&mut self) {
         self.local.connected.store(false, Ordering::Relaxed);
         self.inject(Injector::end);
-        if self.mode == Mode::Capturing {
-            let _ = self.local.cmd.send(CaptureCmd::Release { position: None }).await;
-        }
+        let _ = self.local.cmd.send(CaptureCmd::Release { position: None }).await;
         let _ = self.channel.transport_mut().set_authenticated(false).await;
     }
 
     async fn event_loop(&mut self) -> Ended {
         let mut motion_tick = interval(Duration::from_millis(8));
-        let mut keepalive_tick = interval(Duration::from_secs(1));
+        let mut keepalive_tick = interval(Duration::from_millis(500));
         let mut clipboard_tick = interval(Duration::from_millis(250));
         for tick in [&mut motion_tick, &mut keepalive_tick, &mut clipboard_tick] {
             tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         }
         let mut last_heard = Instant::now();
-        let mut heard_any = false;
         let mut invalid_frames = 0u32;
         let mut last_invalid = String::new();
-        let mut reports_at_heard = self.channel.transport_mut().reports_received();
+        let mut reports_at_heard = self.channel.transport_mut().report_counts();
         let mut last_tick = Instant::now();
 
         loop {
@@ -215,8 +214,7 @@ impl<'a> Session<'a> {
                 received = self.channel.receive() => match received {
                     Ok(message) => {
                         last_heard = Instant::now();
-                        reports_at_heard = self.channel.transport_mut().reports_received();
-                        heard_any = true;
+                        reports_at_heard = self.channel.transport_mut().report_counts();
                         self.on_peer(message).await
                     }
                     Err(SecurityError::Transport(e)) => Err(Ended::Link(e.to_string())),
@@ -262,12 +260,17 @@ impl<'a> Session<'a> {
                     if gap > Duration::from_millis(1500) {
                         eprintln!("Event loop stalled for {} ms", gap.as_millis());
                     }
-                    let limit = if heard_any { PEER_TIMEOUT } else { FIRST_CONTACT_TIMEOUT };
-                    if last_heard.elapsed() > limit {
+                    if last_heard.elapsed() > PEER_TIMEOUT {
                         let silent = last_heard.elapsed().as_secs();
-                        let reports = self.channel.transport_mut().reports_received().wrapping_sub(reports_at_heard);
+                        let (total, link, data, other) = self.channel.transport_mut().report_counts();
+                        let (total, link, data, other) = (
+                            total.wrapping_sub(reports_at_heard.0),
+                            link.wrapping_sub(reports_at_heard.1),
+                            data.wrapping_sub(reports_at_heard.2),
+                            other.wrapping_sub(reports_at_heard.3),
+                        );
                         Err(Ended::Link(format!(
-                            "peer silent for {silent}s ({reports} dongle reports, {invalid_frames} invalid frames, last: {last_invalid:?})"
+                            "peer silent for {silent}s ({total} dongle reports: {link} link, {data} data, {other} other; {invalid_frames} invalid frames, last: {last_invalid:?})"
                         )))
                     } else if self.local.injector.as_ref().is_some_and(|i| !i.alive()) {
                         Err(Ended::Fatal("Compositor hat die Eingabeverbindung beendet".into()))
@@ -359,6 +362,11 @@ impl<'a> Session<'a> {
             }
             CaptureEvent::Activated { position } => match self.mode {
                 Mode::Local if self.opts.role == Role::Master => {
+                    if self.master_return_grace_until.is_some_and(|until| Instant::now() < until) {
+                        self.release_capture(None).await;
+                        return Ok(());
+                    }
+                    self.master_return_grace_until = None;
                     self.motion = (0.0, 0.0);
                     self.mode = Mode::Capturing;
                     let seq = self.next_seq();
@@ -376,7 +384,12 @@ impl<'a> Session<'a> {
                     let request = SwitchRequest { target: seq, edge: self.edge().unwrap_or(Edge::Right), position };
                     self.send_repeated(Message::SwitchRequest(request), 3).await
                 }
-                Mode::Local | Mode::Capturing => Ok(()),
+                Mode::Local => {
+                    // Nur der Node landet hier: eine Erfassung ohne Steuerung sofort freigeben.
+                    self.release_capture(None).await;
+                    Ok(())
+                }
+                Mode::Capturing => Ok(()),
             },
             CaptureEvent::Motion(dx, dy) if self.mode == Mode::Capturing => {
                 self.motion.0 += dx;
@@ -469,6 +482,7 @@ impl<'a> Session<'a> {
             // Der Partner gibt uns die Steuerung zurück.
             self.release_capture(Some(request.position)).await;
             self.mode = Mode::Local;
+            self.master_return_grace_until = Some(Instant::now() + ENTRY_GRACE);
             return Ok(());
         }
         // Der Master wird nie gesteuert.

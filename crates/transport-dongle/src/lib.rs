@@ -42,7 +42,15 @@ pub struct UsbDongleTransport {
     closed: bool,
     next_frame_id: u8,
     reassembler: Reassembler,
-    reports: Arc<AtomicU32>,
+    reports: Arc<ReportCounts>,
+}
+
+#[derive(Default)]
+struct ReportCounts {
+    total: AtomicU32,
+    link: AtomicU32,
+    data: AtomicU32,
+    other: AtomicU32,
 }
 
 impl UsbDongleTransport {
@@ -51,7 +59,7 @@ impl UsbDongleTransport {
         let reader = api.open_path(path).map_err(backend)?;
         let writer = api.open_path(path).map_err(backend)?;
         let (tx, incoming) = mpsc::unbounded_channel();
-        let reports = Arc::new(AtomicU32::new(0));
+        let reports = Arc::new(ReportCounts::default());
         let reader_reports = Arc::clone(&reports);
         std::thread::spawn(move || read_loop(reader, tx, reader_reports));
         Ok(Self {
@@ -65,9 +73,14 @@ impl UsbDongleTransport {
         })
     }
 
-    /// Anzahl aller bisher vom Dongle gelesenen Berichte; zeigt, ob überhaupt etwas ankommt.
-    pub fn reports_received(&self) -> u32 {
-        self.reports.load(Ordering::Relaxed)
+    /// Counts USB reports by type, without recording payload data.
+    pub fn report_counts(&self) -> (u32, u32, u32, u32) {
+        (
+            self.reports.total.load(Ordering::Relaxed),
+            self.reports.link.load(Ordering::Relaxed),
+            self.reports.data.load(Ordering::Relaxed),
+            self.reports.other.load(Ordering::Relaxed),
+        )
     }
 
     /// Setzt auf dem Dongle die LED auf Grün (`true`) oder zurück auf Blau (`false`).
@@ -187,12 +200,17 @@ impl Transport for UsbDongleTransport {
     }
 }
 
-fn read_loop(device: HidDevice, tx: mpsc::UnboundedSender<Incoming>, reports: Arc<AtomicU32>) {
+fn read_loop(device: HidDevice, tx: mpsc::UnboundedSender<Incoming>, reports: Arc<ReportCounts>) {
     let mut report = [0u8; REPORT_LEN];
     while !tx.is_closed() {
         match device.read_timeout(&mut report, READ_POLL_MS) {
             Ok(REPORT_LEN) => {
-                reports.fetch_add(1, Ordering::Relaxed);
+                reports.total.fetch_add(1, Ordering::Relaxed);
+                match report[0] {
+                    TYPE_LINK => reports.link.fetch_add(1, Ordering::Relaxed),
+                    framing::TYPE_DATA => reports.data.fetch_add(1, Ordering::Relaxed),
+                    _ => reports.other.fetch_add(1, Ordering::Relaxed),
+                };
                 let msg = if report[0] == TYPE_LINK { Incoming::Link(report[1] == 1) } else { Incoming::Report(report) };
                 if tx.send(msg).is_err() {
                     break;

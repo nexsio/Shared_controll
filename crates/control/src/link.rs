@@ -7,7 +7,7 @@ use security::{accept, initiate_pairing, initiate_reconnect, Accepted, Identity,
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     sync::watch,
-    time::{sleep, timeout},
+    time::timeout,
 };
 use transport::Transport;
 use transport_dongle::{find_paths, UsbDongleTransport};
@@ -83,16 +83,11 @@ pub async fn establish(
 ) -> Result<SecureChannel<UsbDongleTransport>, Ended> {
     transport.connect().await.map_err(|e| Ended::Link(format!("no radio link ({e})")))?;
     state.send_modify(|s| s.status = LinkStatus::Radio);
-    let session = loop {
-        match handshake_once(&mut transport, opts.role, force_pair, identity, trust).await {
-            Ok(Some(session)) => break session,
-            Ok(None) => return Err(Ended::Fatal("Pairing rejected".into())),
-            Err(SecurityError::Transport(e)) => return Err(Ended::Link(format!("radio link lost ({e})"))),
-            Err(e) => {
-                eprintln!("Handshake failed ({e}), retrying");
-                sleep(Duration::from_secs(1)).await;
-            }
-        }
+    let session = match handshake_once(&mut transport, opts.role, force_pair, identity, trust).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return Err(Ended::Fatal("Pairing rejected".into())),
+        Err(SecurityError::Transport(e)) => return Err(Ended::Link(format!("radio link lost ({e})"))),
+        Err(e) => return Err(Ended::Link(format!("handshake failed ({e})"))),
     };
     let partner = partner_label(session.remote_public());
     let mut channel = SecureChannel::new(transport, session);

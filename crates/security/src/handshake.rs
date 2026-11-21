@@ -87,10 +87,32 @@ async fn send_handshake<T: Transport>(
     Ok(())
 }
 
-async fn receive_handshake<T: Transport>(t: &mut T) -> Result<(MessageKind, Vec<u8>), SecurityError> {
+async fn receive_handshake<T: Transport>(t: &mut T, stage: &'static str) -> Result<(MessageKind, Vec<u8>), SecurityError> {
     let mut buf = [0u8; FRAME_BUF];
-    let n = timeout(STEP_TIMEOUT, t.receive(&mut buf)).await.map_err(|_| SecurityError::Timeout)??;
-    let frame = decode(&buf[..n])?;
+    let n = match timeout(STEP_TIMEOUT, t.receive(&mut buf)).await {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => {
+            eprintln!("Handshake receive failed at {stage}: {e}");
+            return Err(e.into());
+        }
+        Err(_) => {
+            eprintln!("Handshake receive timed out at {stage}");
+            return Err(SecurityError::Timeout);
+        }
+    };
+    let frame = match decode(&buf[..n]) {
+        Ok(frame) => frame,
+        Err(error) => {
+            let version = buf.first().copied();
+            let kind = buf.get(1).copied();
+            let declared_len = (n >= HEADER_LEN).then(|| u16::from_be_bytes([buf[2], buf[3]]));
+            eprintln!(
+                "Rejected handshake frame at {stage}: len={n}, version={version:?}, kind={kind:?}, declared_len={declared_len:?}, error={error:?}"
+            );
+            return Err(error.into());
+        }
+    };
+    eprintln!("Handshake frame at {stage}: kind={:?}, payload_len={}", frame.kind, frame.payload.len());
     Ok((frame.kind, frame.payload.to_vec()))
 }
 
@@ -120,7 +142,7 @@ pub async fn initiate_pairing<T: Transport>(t: &mut T, local: &Identity) -> Resu
     let n = hs.write_message(&[], &mut buf)?;
     send_handshake(t, MessageKind::Hello, Some(MODE_PAIR), &buf[..n]).await?;
 
-    let (kind, payload) = receive_handshake(t).await?;
+    let (kind, payload) = receive_handshake(t, "initiator waiting for pairing response").await?;
     let (mode, noise) = hello_parts(kind, &payload)?;
     if mode != MODE_PAIR {
         return Err(SecurityError::Protocol);
@@ -145,7 +167,7 @@ pub async fn initiate_reconnect<T: Transport>(
     let n = hs.write_message(&[], &mut buf)?;
     send_handshake(t, MessageKind::Hello, Some(MODE_RECONNECT), &buf[..n]).await?;
 
-    let (kind, payload) = receive_handshake(t).await?;
+    let (kind, payload) = receive_handshake(t, "initiator waiting for reconnect response").await?;
     let (mode, noise) = hello_parts(kind, &payload)?;
     if mode != MODE_RECONNECT {
         return Err(SecurityError::Protocol);
@@ -162,7 +184,7 @@ pub async fn accept<T: Transport, S: TrustStore>(
     local: &Identity,
     store: &S,
 ) -> Result<Accepted, SecurityError> {
-    let (kind, payload) = receive_handshake(t).await?;
+    let (kind, payload) = receive_handshake(t, "responder waiting for initial Hello").await?;
     let (mode, msg1) = hello_parts(kind, &payload)?;
     match mode {
         MODE_PAIR => accept_pairing(t, local, msg1).await.map(Accepted::Pairing),
@@ -180,7 +202,7 @@ async fn accept_pairing<T: Transport>(t: &mut T, local: &Identity, msg1: &[u8]) 
     let n = hs.write_message(&[], &mut buf)?;
     send_handshake(t, MessageKind::Hello, Some(MODE_PAIR), &buf[..n]).await?;
 
-    let (kind, payload) = receive_handshake(t).await?;
+    let (kind, payload) = receive_handshake(t, "responder waiting for pairing Auth").await?;
     if kind != MessageKind::Auth {
         return Err(SecurityError::Protocol);
     }
@@ -360,7 +382,7 @@ mod tests {
         send_handshake(&mut ta, MessageKind::Hello, Some(MODE_PAIR), &buf[..n]).await.unwrap();
 
         let attacker = async {
-            let _ = receive_handshake(&mut ta).await.unwrap();
+            let _ = receive_handshake(&mut ta, "test waiting for responder").await.unwrap();
             send_handshake(&mut ta, MessageKind::Auth, None, &[0x42; 64]).await.unwrap();
         };
         let (_, result) = tokio::join!(attacker, accept(&mut tb, &b, &store));
@@ -379,7 +401,7 @@ mod tests {
         send_handshake(&mut ta, MessageKind::Hello, Some(MODE_PAIR), &buf[..n]).await.unwrap();
 
         let attacker = async {
-            let _ = receive_handshake(&mut ta).await.unwrap();
+            let _ = receive_handshake(&mut ta, "test waiting for responder").await.unwrap();
             send_handshake(&mut ta, MessageKind::Keepalive, None, &[]).await.unwrap();
         };
         let (_, result) = tokio::join!(attacker, accept(&mut tb, &b, &store));

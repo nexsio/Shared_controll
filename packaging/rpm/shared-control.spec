@@ -1,6 +1,6 @@
 Name:           shared-control
 Version:        0.1.0
-Release:        6%{?dist}
+Release:        10%{?dist}
 Summary:        Share mouse, keyboard and clipboard between two computers over USB radio dongles
 License:        MIT OR Apache-2.0
 URL:            https://example.invalid/shared-control
@@ -65,6 +65,18 @@ udevadm control --reload-rules >/dev/null 2>&1 || :
 udevadm trigger --subsystem-match=hidraw >/dev/null 2>&1 || :
 
 %changelog
+* Sat Nov 21 2026 Patrik <patrik@localhost> - 0.1.0-10
+- Log handshake phase and safe frame-header metadata, plus HID report-type counters
+
+* Sat Nov 21 2026 Patrik <patrik@localhost> - 0.1.0-9
+- Avoid immediate master edge recapture after a node-to-master handoff
+
+* Sat Nov 21 2026 Patrik <patrik@localhost> - 0.1.0-8
+- Drop failed handshake transports and expire sessions after 8 s without valid peer messages
+
+* Sat Nov 21 2026 Patrik <patrik@localhost> - 0.1.0-7
+- Release stale input captures, tolerate 8 s of peer silence, send keepalives every 500 ms
+
 * Fri Nov 20 2026 Patrik <patrik@localhost> - 0.1.0-6
 - Send each injected event to a single input device and log the offered devices
 
