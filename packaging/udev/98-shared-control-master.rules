@@ -1,0 +1,2 @@
+# Starts the master in the user session when the dongle is plugged in.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1915", ATTRS{idProduct}=="5211", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="shared-control-master.service"

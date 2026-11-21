@@ -1,0 +1,6 @@
+[Unit]
+Description=Shared Control master (starts when the dongle is plugged in)
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/shared-control-master

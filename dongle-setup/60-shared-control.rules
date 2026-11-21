@@ -1,0 +1,3 @@
+# Zugriff auf den Dongle für den angemeldeten Benutzer, ohne chmod nach jedem Einstecken.
+# Der Dateiname muss vor 73-seat-late.rules sortieren, sonst setzt uaccess keine Rechte.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1915", ATTRS{idProduct}=="5211", TAG+="uaccess"

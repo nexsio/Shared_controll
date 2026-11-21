@@ -1,0 +1,6 @@
+/target
+/dongle-firmware/target
+/dongle-firmware/.venv
+/dongle-firmware/out
+*.jpg
+Plan.md

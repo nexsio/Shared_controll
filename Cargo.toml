@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/transport",
+    "crates/security",
+    "crates/transport-bluetooth",
+    "crates/transport-dongle",
+    "crates/control",
+    "crates/ble-poc",
+    "crates/input-poc",
+    "crates/capture-poc",
+    "software_master",
+    "software_node",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

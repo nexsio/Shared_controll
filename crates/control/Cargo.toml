@@ -1,0 +1,22 @@
+[package]
+name = "control"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "remote_desktop", "screencast", "input_capture"] }
+base64 = "0.22"
+futures-util = "0.3"
+hidapi = "2.6.3"
+ksni = { version = "0.3.7", features = ["tokio"] }
+protocol = { path = "../protocol" }
+reis = { version = "0.7", features = ["tokio"] }
+security = { path = "../security" }
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "io-util", "io-std", "process"] }
+transport = { path = "../transport" }
+transport-dongle = { path = "../transport-dongle" }

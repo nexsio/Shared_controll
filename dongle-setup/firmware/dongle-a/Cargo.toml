@@ -1,0 +1,20 @@
+[package]
+name = "dongle-a"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Eigener Workspace, weil das Ziel (thumbv7em) vom Host-Workspace abweicht.
+[workspace]
+
+[dependencies]
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] }
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
+embassy-nrf = { version = "0.11.0", features = ["nrf52840", "time-driver-rtc1", "gpiote", "time"] }
+embassy-time = "0.5.1"
+panic-halt = "1.0.0"
+
+[profile.release]
+opt-level = "s"
+lto = true

@@ -1,0 +1,6 @@
+[Unit]
+Description=Shared Control node (starts when the dongle is plugged in)
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/shared-control-node

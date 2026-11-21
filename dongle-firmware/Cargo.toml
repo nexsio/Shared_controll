@@ -1,0 +1,23 @@
+[package]
+name = "dongle-firmware"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Eigener Workspace, weil das Ziel (thumbv7em) vom Host-Workspace abweicht.
+[workspace]
+
+[dependencies]
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] }
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
+embassy-futures = "0.1.2"
+embassy-nrf = { version = "0.11.0", features = ["nrf52840", "time-driver-rtc1", "gpiote", "time", "unstable-pac"] }
+embassy-sync = "0.8.0"
+embassy-time = "0.5.1"
+embassy-usb = "0.6.0"
+panic-halt = "1.0.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
